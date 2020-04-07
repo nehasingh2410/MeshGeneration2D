@@ -5,10 +5,13 @@
 __device__ double2 gpu_voronoi_thresholdpointsforeachedge[MAX_VORONOI_EDGES][MAX_POINTS_SIZE];
 __device__ int countof_gpu_voronoi_thresholdpointsforeachedge[MAX_VORONOI_EDGES];
 __device__ double2 gpu_nncrust_edgesforeach_voronoithresholdpoint[MAX_VORONOI_EDGES][MAX_POINTS_SIZE * 2];
+__device__ double2 gpu_nncrust_intersectionpoints_foreachvoronoi[MAX_VORONOI_EDGES][MAX_POINTS_SIZE * 2];
 
 __device__ double2 gpu_delaunay_edgesforeachvoronoi[MAX_VORONOI_EDGES][6*MAX_POINTS_SIZE - 15];
 __device__ int gpu_delaunay_edgesindexforeachvoronoi[MAX_VORONOI_EDGES][6 * MAX_POINTS_SIZE - 15];
 __device__ int countof_gpu_delaunay_edgesforeachvoronoi[MAX_VORONOI_EDGES];
+
+
 
 int main()
 {
@@ -170,10 +173,31 @@ int main()
 	h_lines[3] = Line_Segment(make_double2(100.0, -200.0), make_double2(-600.0, -650.0));
 
 
-	Line_Segment* d_lines;
+	Line_Segment *d_lines;
 	checkCudaErrors(cudaMalloc((void**)&d_lines, num_of_lines*sizeof(Line_Segment)));
 	checkCudaErrors(cudaMemcpy(d_lines, h_lines, num_of_lines*sizeof(Line_Segment), cudaMemcpyHostToDevice));
 	double threshold = 10;
+
+	double2 *h_delaunayPoints = new double2[num_of_lines];
+	h_delaunayPoints[0] = make_double2(10.0,4.0);
+	h_delaunayPoints[1] = make_double2(11.0,5.0);
+	h_delaunayPoints[2] = make_double2(12.5, 6.0);
+	h_delaunayPoints[3] = make_double2(13.2, 7.0);
+
+	double2* d_delaunayPoints;
+
+	checkCudaErrors(cudaMalloc((void**)&d_delaunayPoints, num_of_lines*sizeof(double2)));
+	checkCudaErrors(cudaMemcpy(d_delaunayPoints, h_delaunayPoints, num_of_lines*sizeof(double2), cudaMemcpyHostToDevice));
+
+	int *h_no_of_intersections = new int[num_of_lines];
+	int* d_no_of_intersections;
+	checkCudaErrors(cudaMalloc((void**)&d_no_of_intersections, num_of_lines*sizeof(int)));
+
+	double2 *h_intersections = new double2[num_of_lines];
+	double2* d_intersections;
+	checkCudaErrors(cudaMalloc((void**)&d_intersections, num_of_lines*sizeof(double2)));
+	
+
 
 	std::cout << "Outer threshold Points: " << std::endl;
 	start = clock();
@@ -194,10 +218,12 @@ int main()
 	cudaStatus = cudaSetDevice(0);
 
 	// Launch a kernel on the GPU with one thread for each element.
-	delaunayKernel << <1, 4 >> > ();
+	delaunayKernel << <1, 4 >> > (d_lines, d_delaunayPoints, d_no_of_intersections, d_intersections);
 	print_delaunay << <1, 4 >> > ();
 	print_delaunayindex << <1, 4 >> > ();
 	print_NNcurst << <1, 4 >> > ();
+
+	
 
 	// Check for any errors launching the kernel
 	cudaStatus = cudaGetLastError();
@@ -211,6 +237,24 @@ int main()
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
 	}
+	cudaStatus = cudaMemcpy(h_no_of_intersections, d_no_of_intersections, num_of_lines*sizeof(int), cudaMemcpyDeviceToHost);
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMemcpy failed!");
+
+	};
+
+	cudaStatus = cudaMemcpy(h_intersections, d_intersections, num_of_lines*sizeof(double2), cudaMemcpyDeviceToHost);
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMemcpy failed!");
+
+	};
+
+
+	for (int i = 0; i < num_of_lines; i++)
+	{
+		cout << h_no_of_intersections[i] << " " << h_intersections[i].x <<" "<< h_intersections[i].y << endl;
+	}
+
 	int i;
 	std::cin >> i;
 }

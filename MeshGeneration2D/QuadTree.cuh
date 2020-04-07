@@ -369,7 +369,7 @@ __device__ int nodeInsideThreshold(Line_Segment line, Bounding_Box box, Quadtree
 }
 
 __global__ void findOuterThresholdPoints(Quadtree_Node *root, Points *points, Line_Segment *lines, Points *inside_points, double threshold){
-	// printf("Threshold is %lf\n",threshold);
+	printf("Threshold is %lf\n",threshold);
 	int line_idx = threadIdx.x;
 	printf("%d \n", line_idx);
 	Quadtree_Stack qst;

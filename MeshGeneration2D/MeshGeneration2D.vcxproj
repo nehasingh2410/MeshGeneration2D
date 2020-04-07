@@ -23,7 +23,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="delaunay.cuh" />
-    <ClInclude Include="NNcrust.cuh" />
+    <ClInclude Include="global_datatype.h" />
     <ClInclude Include="QuadTree.cuh" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

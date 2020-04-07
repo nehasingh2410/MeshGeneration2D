@@ -13,12 +13,14 @@
 #include <float.h>
 #include <iostream>
 
+#include "QuadTree.cuh"
+
 #define MAX_POINTS_SIZE 600
 #define MAX_VORONOI_EDGES 1000
 
-extern __device__ double2 gpu_voronoi_thresholdpointsforeachedge[MAX_VORONOI_EDGES][MAX_POINTS_SIZE];
+
 extern __device__ double2 gpu_nncrust_edgesforeach_voronoithresholdpoint[MAX_VORONOI_EDGES][MAX_POINTS_SIZE*2];
-extern __device__ int countof_gpu_voronoi_thresholdpointsforeachedge[MAX_VORONOI_EDGES];
+
 
 extern __device__ double2 intersection_points[MAX_VORONOI_EDGES][MAX_POINTS_SIZE * 2];
 
@@ -26,6 +28,8 @@ extern __device__ double2 intersection_points[MAX_VORONOI_EDGES][MAX_POINTS_SIZE
 extern __device__ double2 gpu_delaunay_edgesforeachvoronoi[MAX_VORONOI_EDGES][6 * MAX_POINTS_SIZE - 15];
 extern __device__ int gpu_delaunay_edgesindexforeachvoronoi[MAX_VORONOI_EDGES][6 * MAX_POINTS_SIZE - 15];
 extern __device__ int countof_gpu_delaunay_edgesforeachvoronoi[MAX_VORONOI_EDGES];
+
+extern __device__ double2 gpu_nncrust_intersectionpoints_foreachvoronoi[MAX_VORONOI_EDGES][MAX_POINTS_SIZE * 2];
 
 __device__ bool almost_equal(const double x, const double y, int ulp)
 {
@@ -521,7 +525,7 @@ __device__ double2 lineLineIntersection(double2 A, double2 B, double2 C, double2
 
 }
 
-__global__ void NNcrustKernel(int no_of_points, int voronoi_edge_index)
+__global__ void NNcrustKernel(int no_of_points, int voronoi_edge_index, double2 voronoiedge_endpoint_a, double2 voronoiedge_endpoint_b)
 {
 	int point_of_interest_idx = threadIdx.x;
 	
@@ -570,7 +574,8 @@ __global__ void NNcrustKernel(int no_of_points, int voronoi_edge_index)
 
 	int halfneighbor_point_index = -1;
 	double distance_between_poi_halfneighbor = 10e9;
-	double2 halfneighbor_point;
+	double2 halfneighbor_point = make_double2(0,0);
+	bool half_exist = false;
 
 	for (int i = 0; i < no_of_neighbors; i++)
 	{
@@ -582,8 +587,10 @@ __global__ void NNcrustKernel(int no_of_points, int voronoi_edge_index)
 		{
 			if (distance_between_poi_currentp < distance_between_poi_halfneighbor && angle_in_triangle(nearest_point, point_of_interest, current_point) > 1.57)
 			{
-				halfneighbor_point_index = i;
+				half_exist = true;
 
+				halfneighbor_point_index = i;
+				
 				halfneighbor_point = gpu_delaunay_edgesforeachvoronoi[voronoi_edge_index][i];
 
 				distance_between_poi_halfneighbor = double2_distance(point_of_interest, halfneighbor_point);
@@ -594,7 +601,22 @@ __global__ void NNcrustKernel(int no_of_points, int voronoi_edge_index)
 	gpu_nncrust_edgesforeach_voronoithresholdpoint[voronoi_edge_index][2 * point_of_interest_idx] = nearest_point;
 	gpu_nncrust_edgesforeach_voronoithresholdpoint[voronoi_edge_index][2 * point_of_interest_idx + 1] = halfneighbor_point;
 
-
+	if (doIntersect(point_of_interest, nearest_point, voronoiedge_endpoint_a, voronoiedge_endpoint_b))
+	{
+		gpu_nncrust_intersectionpoints_foreachvoronoi[voronoi_edge_index][2 * point_of_interest_idx] = lineLineIntersection(point_of_interest, nearest_point, voronoiedge_endpoint_a, voronoiedge_endpoint_b);
+	}
+	else
+	{
+		gpu_nncrust_intersectionpoints_foreachvoronoi[voronoi_edge_index][2 * point_of_interest_idx] = make_double2(0, 0);
+	}
+	if (half_exist && doIntersect(point_of_interest, halfneighbor_point, voronoiedge_endpoint_a, voronoiedge_endpoint_b))
+	{
+		gpu_nncrust_intersectionpoints_foreachvoronoi[voronoi_edge_index][2 * point_of_interest_idx] = lineLineIntersection(point_of_interest, halfneighbor_point, voronoiedge_endpoint_a, voronoiedge_endpoint_b);
+	}
+	else
+	{
+		gpu_nncrust_intersectionpoints_foreachvoronoi[voronoi_edge_index][2 * point_of_interest_idx] = make_double2(0, 0);
+	}
 }
 
 __global__ void print_NNcurst()
@@ -607,7 +629,56 @@ __global__ void print_NNcurst()
 	}
 }
 
-__global__ void delaunayKernel()
+__global__ void finalize(int no_of_points, int voronoi_edge_index, int* d_no_of_intersections, double2* d_intersections, double2* d_delaunayPoints)
+{
+	double2 intersectedpoints[30];
+	int no_of_intersectionpoints = 0;
+	printf("no of points : %d-%d\n", voronoi_edge_index, no_of_points);
+	
+	for (int i = 0; i < 2*no_of_points; i++)
+	{
+		double2 p = gpu_nncrust_intersectionpoints_foreachvoronoi[voronoi_edge_index][i];
+		
+		bool repeated_element = false;
+
+		if (!almost_equal(p, make_double2(0, 0), 2))
+		{
+			for (int j = 0; j < no_of_intersectionpoints; j++)
+			{
+				if (almost_equal(p, intersectedpoints[j], 2))
+				{
+					repeated_element = true;
+				}
+			}
+			if (!repeated_element)
+			{
+				intersectedpoints[no_of_intersectionpoints] = p;
+				no_of_intersectionpoints++;
+			}
+		}
+		
+	}
+	d_no_of_intersections[voronoi_edge_index] = no_of_intersectionpoints;
+	
+	double max_dist = 0;
+	double2 ans = make_double2(0,0);
+	int max_index = 0;
+
+	for (int i = 0; i < no_of_intersectionpoints; i++)
+	{
+		printf("intersections: (%lf, %lf) \n", intersectedpoints[i].x, intersectedpoints[i].y);
+		double temp_dist = double2_distance(d_delaunayPoints[voronoi_edge_index], intersectedpoints[i]);
+		if (temp_dist > max_dist)
+		{
+			max_dist = temp_dist;
+			max_index = i;
+		}
+	}
+	ans = intersectedpoints[max_index];
+	d_intersections[voronoi_edge_index] = ans;
+}
+
+__global__ void delaunayKernel(Line_Segment* d_lines, double2* d_delaunayPoints, int* d_no_of_intersections, double2* d_intersections)
 {
 
 	using TriangleType = Delaunay_Triangle;
@@ -838,7 +909,8 @@ __global__ void delaunayKernel()
 	}
 	countof_gpu_delaunay_edgesforeachvoronoi[lane_idx] = edge_count;
 
-	NNcrustKernel << < 1, no_of_points >> > (no_of_points, lane_idx);
+	NNcrustKernel << < 1, no_of_points >> > (no_of_points, lane_idx, d_lines[lane_idx].P1, d_lines[lane_idx].P2);
+	finalize << < 1, 1 >> >(no_of_points, lane_idx, d_no_of_intersections, d_intersections, d_delaunayPoints);
 
 	int i = threadIdx.x;
 	Delaunay_Vector2 z1 = Delaunay_Vector2(1.12, 2.34);
