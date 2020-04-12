@@ -2,6 +2,13 @@
 #include "QuadTree.cuh"
 #include "delaunay.cuh"
 
+//new header
+#include "global_datatype.h"
+#include "Topology.h"
+#include "Geometry.h"
+#include "MeshRefinement.h"
+#include "CreateDelaunay.h"
+
 __device__ double2 gpu_voronoi_thresholdpointsforeachedge[MAX_VORONOI_EDGES][MAX_POINTS_SIZE];
 __device__ int countof_gpu_voronoi_thresholdpointsforeachedge[MAX_VORONOI_EDGES];
 __device__ double2 gpu_nncrust_edgesforeach_voronoithresholdpoint[MAX_VORONOI_EDGES][MAX_POINTS_SIZE * 2];
@@ -65,8 +72,7 @@ int main()
 	std::cout << "File Reading Time: " << run_time << std::endl;
 	num_points = stlX.size();
 	std::cout << "Number of Points: " << num_points << std::endl;
-
-
+	
 	//Set Cuda Device
 	int device_count = 0, device = -1, warp_size = 0;
 	checkCudaErrors(cudaGetDeviceCount(&device_count));
@@ -158,15 +164,115 @@ int main()
 	run_time = ((double)(end - start) / CLOCKS_PER_SEC);
 	std::cout << "Kernel Execution Time: " << run_time << std::endl;
 
+	// Need CPU part to create Delaunay of seed points
+	for(int i=0;i<7;i++)
+	{
+		int n=std::rand()%(num_of_points-1);
+		RandomSample.push_back(OriginalSample.at(n));
+		//if(outputRandomSample.is_open()){outputRandomSample<<OriginalSample.at(n)<<std::endl;}
+	}
+	Delaunay dt;
+	create_Delaunay(dt, RandomSample);
+	
+	Edge_iterator eit = dt.finite_edges_begin();
+		for (; eit != dt.finite_edges_end(); ++eit)
+		{//2
+			if (eit->first->correct_segments[eit->second] == false)
+			{
+				//std::cout << ".....................................Inside............................." << std::endl;
+				//std::cout << eit->first->vertex((eit->second + 1) % 3)->point() << " " << eit->first->vertex((eit->second + 2) % 3)->point() << std::endl;
+				iterate = false;
+				CGAL::Object o = dt.dual(eit);
 
+				const Segment_2* s = CGAL::object_cast<Segment_2>(&o);
+				const Ray_2* r = CGAL::object_cast<Ray_2>(&o);
+
+				int num_of_intersections = 0;
+				Segment_2* temp = new Segment_2;
+				ThreshPoints.clear(); NewThreshPoints.clear(); Neighbors.clear(); Neighbor_Segments.clear();
+
+				if (r)
+				{  
+					if (tree.rootNode->rectangle.has_on_bounded_side((*r).source())){
+						*temp = convToSeg(tree.rootNode->rectangle, *r);
+					}
+				}
+				if (s)
+				{	
+					*temp = *s;
+				}
+			//................here we need the GPU function call................
+			//the return will give us the points to insert into seed (multiple intersection/farthest point) and edges to mark as restricted (1 intersection)
+								
+				/*ThreshPoints = insidePoints(tree, *temp, OT);
+				check_duplicate(ThreshPoints);
+
+				Delaunay dt_thresh;
+				create_Delaunay(dt_thresh, ThreshPoints);
+
+				NewThreshPoints = insidePoints(tree, *temp, IT);
+				check_duplicate(NewThreshPoints);
+				//std::cout<<"Thresh Points "<<ThreshPoints.size()<<"		NewThreshPoints		"<<NewThreshPoints.size()<<std::endl;
+
+				if (ThreshPoints.size() > 2 && NewThreshPoints.size() > 1)
+				{
+					NNCrust(dt_thresh, NewThreshPoints, Neighbors, Neighbor_Segments, *temp, IT);
+					num_of_intersections = check_Intersection(*temp, Neighbor_Segments);
+					
+					if (num_of_intersections > 1)
+					{
+						Point_2 Far_Point = get_Farthest_Point(*temp, Neighbor_Segments, eit->first->vertex((eit->second + 1) % 3)->point());
+						listing.insert(std::pair<Edge, Point_2>(*eit, Far_Point));
+						//std::cout << "Insertion Point	" << Far_Point << std::endl;
+					}  //5
+
+					else if (num_of_intersections == 1)   //this is for marking the restricted delaunay edge
+					{
+						//std::cout<<"Correct Edge	"<<eit->first->vertex((eit->second+1)%3)->point()<<" "<<eit->first->vertex((eit->second+2)%3)->point()<<std::endl;
+						eit->first->correct_segments[eit->second] = true;
+						fh opp_face = eit->first->neighbor(eit->second);
+						int opp_index = opp_face->index(eit->first);
+						opp_face->correct_segments[opp_index] = true;
+					}*/
+				}
+				delete temp;
+			}
+		}//2
+	
+		if (!listing.empty()) // listing contains points to be inserted and their corresponding delaunay edge
+		{
+			//std::cin >> check;
+			int n = 0;
+			iterate = true;
+			//std::cout << ".....................................True............................." << std::endl;
+			for (std::multimap<Edge, Point_2>::iterator m_it = listing.begin(); m_it != listing.end(); ++m_it)
+			{
+				vh vh1, vh2;
+				vh1 = ((*m_it).first).first->vertex((((*m_it).first).second + 1) % 3);
+				vh2 = ((*m_it).first).first->vertex((((*m_it).first).second + 2) % 3);
+				if ((dt_sample.is_edge(vh1, vh2)) && (((*m_it).first).first->correct_segments[((*m_it).first).second] == false))
+				{
+					vh tempVhandle = dt_sample.insert((*m_it).second);	
+					//std::cout << "Point Inserted	" << tempVhandle->point() << std::endl;
+					deFace(dt_sample, tempVhandle);
+					markEdge(dt_sample, tree, tempVhandle);
+				}
+			}
+			//std::cout<<"total_inEdgeMarking	"<<n<<std::endl;
+		}
+
+	
+	// GPU part ...  ALL THIS WILL COME INSIDE .... if (ThreshPoints.size() > 2 && NewThreshPoints.size() > 1)...
 	checkCudaErrors(cudaGetLastError());
 	printQuadtree << <1, 1 >> >(d_root);
-	int num_of_lines = 4;
+	int num_of_lines = 4; 		// These will be dynamic or set a high number as it will keep on increasing 
 	printf("Before Inside Initialization\n");
 	Points* d_inside_points = initializeInsidePoints(num_of_lines);
 	//printf("After Inside points\n");
 	cudaDeviceSynchronize();
 	Line_Segment *h_lines = new Line_Segment[num_of_lines];
+
+	// can use a for loop for voronoi edges
 	h_lines[0] = Line_Segment(make_double2(100.0, -200.0), make_double2(0.0, 300.0));
 	h_lines[1] = Line_Segment(make_double2(0.0, 300.0), make_double2(600.0, 650.0));
 	h_lines[2] = Line_Segment(make_double2(0.0, 300.0), make_double2(-550.0, 680.0));
